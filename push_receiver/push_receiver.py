@@ -193,7 +193,7 @@ def fcm_register(sender_id, token, retries=5):
   __log.debug(data)
   req = Request(url=FCM_SUBSCRIBE, data=data.encode("utf-8"))
   resp_data = __do_request(req, retries)
-  return {"keys": keys, "fcm": json.loads(resp_data)}
+  return {"keys": keys, "fcm": json.loads(resp_data.decode("utf-8"))}
 
 
 def register(sender_id):
@@ -356,7 +356,7 @@ def __listen(s, credentials, callback, persistent_ids, obj):
         version="aesgcm",
         auth_secret=secret
     )
-    callback(obj, json.loads(decrypted), p)
+    callback(obj, json.loads(decrypted.decode("utf-8")), p)
 
 
 def listen(credentials, callback, received_persistent_ids=[], obj=None):
@@ -375,7 +375,7 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
   context = ssl.create_default_context()
   sock = socket.create_connection((HOST, 5228))
   s = context.wrap_socket(sock, server_hostname=HOST)
-  __log.debug(s.version())
+  __log.debug("connected to ssl socket")
   __listen(s, credentials, callback, received_persistent_ids, obj)
   s.close()
   sock.close()

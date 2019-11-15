@@ -2,7 +2,7 @@ subscribe to GCM/FCM and receive notifications
 
 python implementation of https://github.com/MatthieuLemoine/push-receiver
 
-tested on python 2.7.16 and 3.7.5
+tested on python 2.7.16, 3.4.10 and 3.7.5
 
 I put this together in a day or so, it's still rough around the edges,
 especially the listen part, which I don't really use myself and have just

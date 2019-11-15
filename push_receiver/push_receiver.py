@@ -12,8 +12,6 @@ from .mcs_pb2 import *
 import uuid
 from .checkin_pb2 import AndroidCheckinRequest, AndroidCheckinResponse
 from .android_checkin_pb2 import AndroidCheckinProto, ChromeBuildProto
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode
 import logging
 from oscrypto.asymmetric import generate_pair
 from base64 import urlsafe_b64encode, urlsafe_b64decode
@@ -21,6 +19,25 @@ import os
 import json
 import time
 from google.protobuf.json_format import MessageToDict
+from binascii import hexlify
+
+try:
+  from urllib.request import Request, urlopen
+  from urllib.parse import urlencode
+except ImportError:
+  from urllib2 import Request, urlopen
+  from urllib import urlencode
+
+try:
+  FileExistsError
+except NameError:
+  FileExistsError = OSError
+  FileNotFoundError = IOError
+
+try:
+  unicode
+except NameError:
+  unicode = str
 
 __log = logging.getLogger("push_receiver")
 
@@ -40,11 +57,9 @@ FCM_ENDPOINT = 'https://fcm.googleapis.com/fcm/send'
 def __do_request(req, retries=5):
   for _ in range(retries):
     try:
-      with urlopen(req) as resp:
-        __log.debug("-> %d" % resp.status)
-        for name, val in resp.getheaders():
-          __log.debug("{}: {}".format(name, val))
-        resp_data = resp.read()
+      resp = urlopen(req)
+      resp_data = resp.read()
+      resp.close()
       __log.debug(resp_data)
       return resp_data
     except Exception as e:
@@ -83,7 +98,6 @@ def gcm_check_in(androidId=None, securityToken=None, **kwargs):
   __log.debug(payload)
   req = Request(
       url=CHECKIN_URL,
-      method="POST",
       headers={"Content-Type": "application/x-protobuf"},
       data=payload.SerializeToString()
   )
@@ -140,7 +154,9 @@ def gcm_register(appId, retries=5, **kwargs):
       continue
     token = resp_data.decode("utf-8").split("=")[1]
     chkfields = {k: chk[k] for k in ["androidId", "securityToken"]}
-    return {"token": token, "appId": appId, **chkfields}
+    res = {"token": token, "appId": appId}
+    res.update(chkfields)
+    return res
   return None
 
 
@@ -157,7 +173,7 @@ def fcm_register(sender_id, token, retries=5):
   # https://lapo.it/asn1js
   # first byte of public key is skipped for some reason
   # maybe it's always zero
-  public, private = generate_pair("ec", curve="secp256r1")
+  public, private = generate_pair("ec", curve=unicode("secp256r1"))
   from base64 import b64encode
   __log.debug("# public")
   __log.debug(b64encode(public.asn1.dump()))
@@ -187,7 +203,9 @@ def register(sender_id):
   __log.debug(subscription)
   fcm = fcm_register(sender_id=sender_id, token=subscription["token"])
   __log.debug(fcm)
-  return {"gcm": subscription, **fcm}
+  res = {"gcm": subscription}
+  res.update(fcm)
+  return res
 
 # -------------------------------------------------------------------------
 
@@ -230,7 +248,7 @@ def __read_varint32(s):
   res = 0
   shift = 0
   while True:
-    b = __read(s, 1)[0]
+    b, = struct.unpack("B", __read(s, 1))
     res |= (b & 0x7F) << shift
     if (b & 0x80) == 0:
       break
@@ -239,21 +257,29 @@ def __read_varint32(s):
 
 
 def __encode_varint32(x):
-  res = b""
+  res = bytearray([])
   while x != 0:
     b = (x & 0x7F)
     x >>= 7
     if x != 0:
       b |= 0x80
-    res += bytes([b])
-  return res
+    res.append(b)
+  return bytes(res)
 
 
 def __send(s, packet):
-  header = bytes([MCS_VERSION, PACKET_BY_TAG.index(type(packet))])
+  header = bytearray([MCS_VERSION, PACKET_BY_TAG.index(type(packet))])
   __log.debug(packet)
   payload = packet.SerializeToString()
-  s.send(header + __encode_varint32(len(payload)) + payload)
+  buf = bytes(header) + __encode_varint32(len(payload)) + payload
+  __log.debug(hexlify(buf))
+  n = len(buf)
+  total = 0
+  while total < n:
+    sent = s.send(buf[total:])
+    if sent == 0:
+      raise RuntimeError("socket connection broken")
+    total += sent
 
 
 def __recv(s, first=False):
@@ -263,13 +289,13 @@ def __recv(s, first=False):
     if version < MCS_VERSION and version != 38:
       raise RuntimeError("protocol version {} unsupported".format(version))
   else:
-    tag = __read(s, 1)[0]
+    tag, = struct.unpack("B", __read(s, 1))
   __log.debug("tag {} ({})".format(tag, PACKET_BY_TAG[tag]))
   size = __read_varint32(s)
   __log.debug("size {}".format(size))
   if size >= 0:
     buf = __read(s, size)
-    __log.debug(buf)
+    __log.debug(hexlify(buf))
     Packet = PACKET_BY_TAG[tag]
     payload = Packet()
     payload.ParseFromString(buf)
@@ -306,8 +332,7 @@ def __listen(s, credentials, callback, persistent_ids, obj):
   req.user = credentials["gcm"]["androidId"]
   req.use_rmq2 = True
   req.setting.add(name="new_vc", value="1")
-  for x in persistent_ids:
-    req.received_persistent_id.add(x)
+  req.received_persistent_id.extend(persistent_ids)
   __send(s, req)
   login_response = __recv(s, first=True)
   while True:
@@ -316,12 +341,12 @@ def __listen(s, credentials, callback, persistent_ids, obj):
       continue
     crypto_key = __app_data_by_key(p, "crypto-key")[3:]  # strip dh=
     salt = __app_data_by_key(p, "encryption")[5:]  # strip salt=
-    crypto_key = urlsafe_b64decode(crypto_key)
-    salt = urlsafe_b64decode(salt)
+    crypto_key = urlsafe_b64decode(crypto_key.encode("ascii"))
+    salt = urlsafe_b64decode(salt.encode("ascii"))
     der_data = credentials["keys"]["private"]
-    der_data = urlsafe_b64decode(der_data + "========")
+    der_data = urlsafe_b64decode(der_data.encode("ascii") + b"========")
     secret = credentials["keys"]["secret"]
-    secret = urlsafe_b64decode(secret + "========")
+    secret = urlsafe_b64decode(secret.encode("ascii") + b"========")
     privkey = load_der_private_key(
         der_data, password=None, backend=default_backend()
     )
@@ -348,10 +373,12 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
   import ssl
   HOST = "mtalk.google.com"
   context = ssl.create_default_context()
-  with socket.create_connection((HOST, 5228)) as sock:
-    with context.wrap_socket(sock, server_hostname=HOST) as s:
-      __log.debug(s.version())
-      __listen(s, credentials, callback, received_persistent_ids, obj)
+  sock = socket.create_connection((HOST, 5228))
+  s = context.wrap_socket(sock, server_hostname=HOST)
+  __log.debug(s.version())
+  __listen(s, credentials, callback, received_persistent_ids, obj)
+  s.close()
+  sock.close()
 
 
 def run_example():

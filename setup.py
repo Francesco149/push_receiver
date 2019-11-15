@@ -1,8 +1,9 @@
-#!/bin/env python3
+#!/bin/env python
 
 from setuptools import setup, find_packages
 
 push_receiver_classifiers = [
+    "Programming Language :: Python :: 2",
     "Programming Language :: Python :: 3",
     "Intended Audience :: Developers",
     "License :: Public Domain",

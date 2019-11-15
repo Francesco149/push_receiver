@@ -1,0 +1,12 @@
+language: python
+
+python:
+  - "3.0"
+  - "3.8"
+  - "nightly"
+  - "pypy3"
+
+install: pip install .[listen,example]
+
+script:
+  - python -m "push_receiver" --sender-id=722915550290 --no-listen

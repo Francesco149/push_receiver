@@ -339,8 +339,18 @@ def __listen(s, credentials, callback, persistent_ids, obj):
     p = __recv(s)
     if type(p) is not DataMessageStanza:
       continue
-    crypto_key = __app_data_by_key(p, "crypto-key")[3:]  # strip dh=
-    salt = __app_data_by_key(p, "encryption")[5:]  # strip salt=
+
+    # "crypto-key" and "encryption" cause errors on broken messages, so skip iteration if detected
+    # See https://github.com/MatthieuLemoine/push-receiver/issues/21
+
+    crypto_key = __app_data_by_key(p, "crypto-key", blow_shit_up=False)  # Can be None
+    if not crypto_key: continue
+    crypto_key = crypto_key[3:]  # strip dh=
+
+    salt = __app_data_by_key(p, "encryption", blow_shit_up=False)  # Can be None
+    if not salt: continue
+    salt = salt[5:]  # strip salt=
+
     crypto_key = urlsafe_b64decode(crypto_key.encode("ascii"))
     salt = urlsafe_b64decode(salt.encode("ascii"))
     der_data = credentials["keys"]["private"]
@@ -359,7 +369,7 @@ def __listen(s, credentials, callback, persistent_ids, obj):
     callback(obj, json.loads(decrypted.decode("utf-8")), p)
 
 
-def listen(credentials, callback, received_persistent_ids=[], obj=None):
+def listen(credentials, callback, received_persistent_ids=None, obj=None):
   """
   listens for push notifications
 
@@ -369,6 +379,8 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
                            array of strings
   obj: optional arbitrary value passed to callback
   """
+  if received_persistent_ids is None:
+    received_persistent_ids = []
   import socket
   import ssl
   HOST = "mtalk.google.com"

@@ -55,6 +55,13 @@ FCM_ENDPOINT = 'https://fcm.googleapis.com/fcm/send'
 
 
 def __do_request(req, retries=5):
+  # Enable possibility to use ENV var to disable certificate checking, for debugging etc.
+  URLLIB_VERIFY_CERTIFICATES = os.getenv("URLLIB_VERIFY_CERTIFICATES", "true") == "true"
+  ctx = ssl.create_default_context()
+  if not URLLIB_VERIFY_CERTIFICATES:
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
   for _ in range(retries):
     try:
       resp = urlopen(req)

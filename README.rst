@@ -59,6 +59,7 @@ you can also run this example with this command (change the sender id)
 
     if __name__ == "__main__":
       SENDER_ID = 722915550290  # change this to your sender id
+      APP_ID = "my:app:id"  # change this to your app id
 
       try:
         # already registered, load previous credentials
@@ -67,7 +68,7 @@ you can also run this example with this command (change the sender id)
 
       except FileNotFoundError:
         # first time, register and store credentials
-        credentials = register(sender_id=SENDER_ID)
+        credentials = register(sender_id=SENDER_ID, app_id=APP_ID)
         with open("credentials.json", "w") as f:
           json.dump(credentials, f)
 

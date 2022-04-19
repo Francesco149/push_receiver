@@ -196,10 +196,9 @@ def fcm_register(sender_id, token, retries=5):
   return {"keys": keys, "fcm": json.loads(resp_data.decode("utf-8"))}
 
 
-def register(sender_id):
+def register(sender_id, app_id):
   """register gcm and fcm tokens for sender_id"""
-  appId = "wp:receiver.push.com#{}".format(uuid.uuid4())
-  subscription = gcm_register(appId=appId)
+  subscription = gcm_register(appId=app_id)
   __log.debug(subscription)
   fcm = fcm_register(sender_id=sender_id, token=subscription["token"])
   __log.debug(fcm)
@@ -413,7 +412,8 @@ def run_example():
       credentials = json.load(f)
 
   except FileNotFoundError:
-    credentials = register(sender_id=int(args.sender_id))
+    app_id = "wp:receiver.push.com#{}".format(uuid.uuid4())
+    credentials = register(sender_id=int(args.sender_id), app_id=app_id)
     with open(credentials_path, "w") as f:
       json.dump(credentials, f)
 

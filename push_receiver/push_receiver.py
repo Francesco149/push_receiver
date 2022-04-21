@@ -8,6 +8,7 @@
 # For more information, please refer to <http://unlicense.org/>
 
 import struct
+import select
 from .mcs_pb2 import *
 import uuid
 from .checkin_pb2 import AndroidCheckinRequest, AndroidCheckinResponse
@@ -53,6 +54,8 @@ CHECKIN_URL = "https://android.clients.google.com/checkin"
 FCM_SUBSCRIBE = 'https://fcm.googleapis.com/fcm/connect/subscribe'
 FCM_ENDPOINT = 'https://fcm.googleapis.com/fcm/send'
 
+READ_TIMEOUT_SECS = 60 * 60
+MIN_RESET_INTERVAL_SECS = 60 * 5
 
 def __do_request(req, retries=5):
   for _ in range(retries):
@@ -282,6 +285,15 @@ def __send(s, packet):
 
 
 def __recv(s, first=False):
+  try:
+    readable, _, _ = select.select([s,], [], [], READ_TIMEOUT_SECS)
+    if len(readable) == 0:
+      __log.debug("Select read timeout")
+      return None
+  except select.error:
+    __log.debug("Select error")
+    return None
+  __log.debug("Data available to read")
   if first:
     version, tag = struct.unpack("BB", __read(s, 2))
     __log.debug("version {}".format(version))
@@ -312,12 +324,19 @@ def __app_data_by_key(p, key, blow_shit_up=True):
   return None
 
 
-def __listen(s, credentials, callback, persistent_ids, obj):
-  import http_ece
-  import cryptography.hazmat.primitives.serialization as serialization
-  from cryptography.hazmat.backends import default_backend
-  load_der_private_key = serialization.load_der_private_key
+def __open():
+  import socket
+  import ssl
+  HOST = "mtalk.google.com"
+  context = ssl.create_default_context()
+  sock = socket.create_connection((HOST, 5228))
+  s = context.wrap_socket(sock, server_hostname=HOST)
+  __log.debug("connected to ssl socket")
+  return s
 
+
+def __login(credentials, persistent_ids):
+  s = __open()
   gcm_check_in(**credentials["gcm"])
   req = LoginRequest()
   req.adaptive_heartbeat = False
@@ -334,28 +353,77 @@ def __listen(s, credentials, callback, persistent_ids, obj):
   req.received_persistent_id.extend(persistent_ids)
   __send(s, req)
   login_response = __recv(s, first=True)
+  __log.info(f'Received login response:\n{login_response}')
+  return s
+
+
+last_reset = 0
+def __reset(s, credentials, persistent_ids):
+  global last_reset
+  now = time.time()
+  if (now - last_reset < MIN_RESET_INTERVAL_SECS):
+    raise Exception("Too many connection reset attempts.")
+  last_reset = now
+  __log.debug("Reestablishing connection")
+  s.shutdown(2)
+  s.close()
+  return __login(credentials, persistent_ids)
+
+
+def __listen(credentials, callback, persistent_ids, obj):
+  s = __login(credentials, persistent_ids)
   while True:
-    p = __recv(s)
-    if type(p) is not DataMessageStanza:
-      continue
-    crypto_key = __app_data_by_key(p, "crypto-key")[3:]  # strip dh=
-    salt = __app_data_by_key(p, "encryption")[5:]  # strip salt=
-    crypto_key = urlsafe_b64decode(crypto_key.encode("ascii"))
-    salt = urlsafe_b64decode(salt.encode("ascii"))
-    der_data = credentials["keys"]["private"]
-    der_data = urlsafe_b64decode(der_data.encode("ascii") + b"========")
-    secret = credentials["keys"]["secret"]
-    secret = urlsafe_b64decode(secret.encode("ascii") + b"========")
-    privkey = load_der_private_key(
-        der_data, password=None, backend=default_backend()
-    )
-    decrypted = http_ece.decrypt(
-        p.raw_data, salt=salt,
-        private_key=privkey, dh=crypto_key,
-        version="aesgcm",
-        auth_secret=secret
-    )
-    callback(obj, json.loads(decrypted.decode("utf-8")), p)
+    try:
+      p = __recv(s)
+      if type(p) is DataMessageStanza:
+        id = __handle_data_message(p, credentials, callback, obj)
+        persistent_ids.append(id)
+      elif type(p) is HeartbeatPing:
+        __handle_ping(s, p)
+      elif p == None or type(p) is Close:
+        s = __reset(s, credentials, persistent_ids)
+      else:
+        __log.debug(f'Unexpected message type {type(p)}.')
+    except ConnectionResetError:
+      __log.debug("Connection Reset: Reconnecting")
+      s = __reset(s, credentials, persistent_ids)
+
+
+def __handle_data_message(p, credentials, callback, obj):
+  import http_ece
+  import cryptography.hazmat.primitives.serialization as serialization
+  from cryptography.hazmat.backends import default_backend
+  load_der_private_key = serialization.load_der_private_key
+
+  crypto_key = __app_data_by_key(p, "crypto-key")[3:]  # strip dh=
+  salt = __app_data_by_key(p, "encryption")[5:]  # strip salt=
+  crypto_key = urlsafe_b64decode(crypto_key.encode("ascii"))
+  salt = urlsafe_b64decode(salt.encode("ascii"))
+  der_data = credentials["keys"]["private"]
+  der_data = urlsafe_b64decode(der_data.encode("ascii") + b"========")
+  secret = credentials["keys"]["secret"]
+  secret = urlsafe_b64decode(secret.encode("ascii") + b"========")
+  privkey = load_der_private_key(
+      der_data, password=None, backend=default_backend()
+  )
+  decrypted = http_ece.decrypt(
+      p.raw_data, salt=salt,
+      private_key=privkey, dh=crypto_key,
+      version="aesgcm",
+      auth_secret=secret
+  )
+  __log.info(f'Received data message {p.persistent_id}: {decrypted}')
+  callback(obj, json.loads(decrypted.decode("utf-8")), p)
+  return p.persistent_id
+
+
+def __handle_ping(s, p):
+  __log.debug(f'Responding to ping: Stream ID: {p.stream_id}, Last: {p.last_stream_id_received}, Status: {p.status}')
+  req = HeartbeatAck()
+  req.stream_id = p.stream_id + 1
+  req.last_stream_id_received = p.stream_id
+  req.status = p.status
+  __send(s, req)
 
 
 def listen(credentials, callback, received_persistent_ids=[], obj=None):
@@ -368,17 +436,7 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
                            array of strings
   obj: optional arbitrary value passed to callback
   """
-  import socket
-  import ssl
-  HOST = "mtalk.google.com"
-  context = ssl.create_default_context()
-  sock = socket.create_connection((HOST, 5228))
-  s = context.wrap_socket(sock, server_hostname=HOST)
-  __log.debug("connected to ssl socket")
-  __listen(s, credentials, callback, received_persistent_ids, obj)
-  s.close()
-  sock.close()
-
+  __listen(credentials, callback, received_persistent_ids, obj)
 
 def run_example():
   """sample that registers a token and waits for notifications"""

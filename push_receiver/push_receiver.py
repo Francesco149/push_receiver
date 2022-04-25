@@ -366,8 +366,11 @@ def __reset(s, credentials, persistent_ids):
     raise Exception("Too many connection reset attempts.")
   last_reset = now
   __log.debug("Reestablishing connection")
-  s.shutdown(2)
-  s.close()
+  try:
+    s.shutdown(2)
+    s.close()
+  except OSError as e:
+    __log.debug(f"Unable to close connection {e}")  
   return __login(credentials, persistent_ids)
 
 
@@ -387,7 +390,7 @@ def __listen(credentials, callback, persistent_ids, obj):
         __log.debug(f'Unexpected message type {type(p)}.')
     except ConnectionResetError:
       __log.debug("Connection Reset: Reconnecting")
-      s = __reset(s, credentials, persistent_ids)
+      s = __login(credentials, persistent_ids)
 
 
 def __handle_data_message(p, credentials, callback, obj):

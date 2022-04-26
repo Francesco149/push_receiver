@@ -65,7 +65,6 @@ def __do_request(req, retries=5):
       resp = urlopen(req)
       resp_data = resp.read()
       resp.close()
-      __log.debug(resp_data)
       return resp_data
     except Exception as e:
       __log.debug("error during request", exc_info=e)
@@ -100,7 +99,7 @@ def gcm_check_in(androidId=None, securityToken=None, **kwargs):
   if securityToken:
     payload.security_token = int(securityToken)
 
-  __log.debug(payload)
+  __log.debug(f'GCM check in payload: {payload}')
   req = Request(
       url=CHECKIN_URL,
       headers={"Content-Type": "application/x-protobuf"},
@@ -109,7 +108,7 @@ def gcm_check_in(androidId=None, securityToken=None, **kwargs):
   resp_data = __do_request(req)
   resp = AndroidCheckinResponse()
   resp.ParseFromString(resp_data)
-  __log.debug(resp)
+  __log.debug(f'GCM check in response (raw): {resp}')
   return MessageToDict(resp)
 
 
@@ -136,7 +135,7 @@ def gcm_register(appId, retries=5, **kwargs):
   """
   # contains androidId, securityToken and more
   chk = gcm_check_in()
-  __log.debug(chk)
+  __log.debug(f'GCM check in response {chk}')
   body = {
       "app": "org.chromium.linux",
       "X-subtype": appId,
@@ -144,7 +143,7 @@ def gcm_register(appId, retries=5, **kwargs):
       "sender": urlsafe_base64(SERVER_KEY)
   }
   data = urlencode(body)
-  __log.debug(data)
+  __log.debug(f'GCM Registration request: {data}')
   auth = "AidLogin {}:{}".format(chk["androidId"], chk["securityToken"])
   req = Request(
       url=REGISTER_URL,
@@ -180,10 +179,8 @@ def fcm_register(sender_id, token, retries=5):
   # maybe it's always zero
   public, private = generate_pair("ec", curve=unicode("secp256r1"))
   from base64 import b64encode
-  __log.debug("# public")
-  __log.debug(b64encode(public.asn1.dump()))
-  __log.debug("# private")
-  __log.debug(b64encode(private.asn1.dump()))
+  __log.debug(f"# public: {b64encode(public.asn1.dump())}")
+  __log.debug(f"# private: {b64encode(private.asn1.dump())}")
   keys = {
       "public": urlsafe_base64(public.asn1.dump()[26:]),
       "private": urlsafe_base64(private.asn1.dump()),
@@ -195,7 +192,7 @@ def fcm_register(sender_id, token, retries=5):
       "encryption_key": keys["public"],
       "encryption_auth": keys["secret"]
   })
-  __log.debug(data)
+  __log.debug(f'FCM registration data: {data}')
   req = Request(url=FCM_SUBSCRIBE, data=data.encode("utf-8"))
   resp_data = __do_request(req, retries)
   return {"keys": keys, "fcm": json.loads(resp_data.decode("utf-8"))}
@@ -204,9 +201,9 @@ def fcm_register(sender_id, token, retries=5):
 def register(sender_id, app_id):
   """register gcm and fcm tokens for sender_id"""
   subscription = gcm_register(appId=app_id)
-  __log.debug(subscription)
+  __log.debug(f'GCM subscription: {subscription}')
   fcm = fcm_register(sender_id=sender_id, token=subscription["token"])
-  __log.debug(fcm)
+  __log.debug(f'FCM registration: {fcm}')
   res = {"gcm": subscription}
   res.update(fcm)
   return res
@@ -273,10 +270,10 @@ def __encode_varint32(x):
 
 def __send(s, packet):
   header = bytearray([MCS_VERSION, PACKET_BY_TAG.index(type(packet))])
-  __log.debug(packet)
+  __log.debug(f'Packet to send: {packet}')
   payload = packet.SerializeToString()
   buf = bytes(header) + __encode_varint32(len(payload)) + payload
-  __log.debug(hexlify(buf))
+  __log.debug(f'Send buffer: {hexlify(buf)}')
   n = len(buf)
   total = 0
   while total < n:
@@ -295,7 +292,6 @@ def __recv(s, first=False):
   except select.error:
     __log.debug("Select error")
     return None
-  __log.debug("Data available to read")
   if first:
     version, tag = struct.unpack("BB", __read(s, 2))
     __log.debug("version {}".format(version))
@@ -303,16 +299,15 @@ def __recv(s, first=False):
       raise RuntimeError("protocol version {} unsupported".format(version))
   else:
     tag, = struct.unpack("B", __read(s, 1))
-  __log.debug("tag {} ({})".format(tag, PACKET_BY_TAG[tag]))
   size = __read_varint32(s)
-  __log.debug("size {}".format(size))
+  __log.debug("Received message with tag {} ({}), size {}".format(tag, PACKET_BY_TAG[tag], size))
   if size >= 0:
     buf = __read(s, size)
-    __log.debug(hexlify(buf))
+    __log.debug(f'Receive buffer: {hexlify(buf)}')
     Packet = PACKET_BY_TAG[tag]
     payload = Packet()
     payload.ParseFromString(buf)
-    __log.debug(payload)
+    __log.debug(f'Receive payload: {payload}')
     return payload
   return None
 

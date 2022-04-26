@@ -99,7 +99,7 @@ def gcm_check_in(androidId=None, securityToken=None, **kwargs):
   if securityToken:
     payload.security_token = int(securityToken)
 
-  __log.debug(f'GCM check in payload: {payload}')
+  __log.debug(f'GCM check in payload:\n{payload}')
   req = Request(
       url=CHECKIN_URL,
       headers={"Content-Type": "application/x-protobuf"},
@@ -108,7 +108,7 @@ def gcm_check_in(androidId=None, securityToken=None, **kwargs):
   resp_data = __do_request(req)
   resp = AndroidCheckinResponse()
   resp.ParseFromString(resp_data)
-  __log.debug(f'GCM check in response (raw): {resp}')
+  __log.debug(f'GCM check in response (raw):\n{resp}')
   return MessageToDict(resp)
 
 
@@ -273,7 +273,6 @@ def __send(s, packet):
   __log.debug(f'Packet to send: {packet}')
   payload = packet.SerializeToString()
   buf = bytes(header) + __encode_varint32(len(payload)) + payload
-  __log.debug(f'Send buffer: {hexlify(buf)}')
   n = len(buf)
   total = 0
   while total < n:
@@ -303,11 +302,10 @@ def __recv(s, first=False):
   __log.debug("Received message with tag {} ({}), size {}".format(tag, PACKET_BY_TAG[tag], size))
   if size >= 0:
     buf = __read(s, size)
-    __log.debug(f'Receive buffer: {hexlify(buf)}')
     Packet = PACKET_BY_TAG[tag]
     payload = Packet()
     payload.ParseFromString(buf)
-    __log.debug(f'Receive payload: {payload}')
+    __log.debug(f'Receive payload:\n{payload}')
     return payload
   return None
 

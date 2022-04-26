@@ -19,6 +19,7 @@ from base64 import urlsafe_b64encode, urlsafe_b64decode
 import os
 import json
 import time
+import threading
 from google.protobuf.json_format import MessageToDict
 from binascii import hexlify
 
@@ -56,6 +57,7 @@ FCM_ENDPOINT = 'https://fcm.googleapis.com/fcm/send'
 
 READ_TIMEOUT_SECS = 60 * 60
 MIN_RESET_INTERVAL_SECS = 60 * 5
+CHECKIN_INTERVAL_SECS = 60 * 60
 
 def __do_request(req, retries=5):
   for _ in range(retries):
@@ -337,7 +339,6 @@ def __open():
 
 def __login(credentials, persistent_ids):
   s = __open()
-  gcm_check_in(**credentials["gcm"])
   req = LoginRequest()
   req.adaptive_heartbeat = False
   req.auth_service = 2
@@ -371,25 +372,6 @@ def __reset(s, credentials, persistent_ids):
   except OSError as e:
     __log.debug(f"Unable to close connection {e}")  
   return __login(credentials, persistent_ids)
-
-
-def __listen(credentials, callback, persistent_ids, obj):
-  s = __login(credentials, persistent_ids)
-  while True:
-    try:
-      p = __recv(s)
-      if type(p) is DataMessageStanza:
-        id = __handle_data_message(p, credentials, callback, obj)
-        persistent_ids.append(id)
-      elif type(p) is HeartbeatPing:
-        __handle_ping(s, p)
-      elif p == None or type(p) is Close:
-        s = __reset(s, credentials, persistent_ids)
-      else:
-        __log.debug(f'Unexpected message type {type(p)}.')
-    except ConnectionResetError:
-      __log.debug("Connection Reset: Reconnecting")
-      s = __login(credentials, persistent_ids)
 
 
 def __handle_data_message(p, credentials, callback, obj):
@@ -429,6 +411,12 @@ def __handle_ping(s, p):
   __send(s, req)
 
 
+def checkin_on_schedule(credentials):
+  global checkin_thread
+  gcm_check_in(**credentials["gcm"])
+  checkin_thread = threading.Timer(CHECKIN_INTERVAL_SECS, checkin_on_schedule, [credentials])
+
+
 def listen(credentials, callback, received_persistent_ids=[], obj=None):
   """
   listens for push notifications
@@ -439,7 +427,28 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
                            array of strings
   obj: optional arbitrary value passed to callback
   """
-  __listen(credentials, callback, received_persistent_ids, obj)
+  s = __login(credentials, received_persistent_ids)
+  checkin_on_schedule(credentials)  
+  while True:
+    try:
+      p = __recv(s)
+      if type(p) is DataMessageStanza:
+        id = __handle_data_message(p, credentials, callback, obj)
+        received_persistent_ids.append(id)
+      elif type(p) is HeartbeatPing:
+        __handle_ping(s, p)
+      elif p == None or type(p) is Close:
+        s = __reset(s, credentials, received_persistent_ids)
+      else:
+        __log.debug(f'Unexpected message type {type(p)}.')
+    except ConnectionResetError:
+      __log.debug("Connection Reset: Reconnecting")
+      s = __login(credentials, received_persistent_ids)
+
+
+def shutdown():
+  checkin_thread.cancel()
+
 
 def run_example():
   """sample that registers a token and waits for notifications"""

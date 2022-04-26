@@ -270,7 +270,7 @@ def __encode_varint32(x):
 
 def __send(s, packet):
   header = bytearray([MCS_VERSION, PACKET_BY_TAG.index(type(packet))])
-  __log.debug(f'Packet to send: {packet}')
+  __log.debug(f'Packet to send:\n{packet}')
   payload = packet.SerializeToString()
   buf = bytes(header) + __encode_varint32(len(payload)) + payload
   n = len(buf)
@@ -408,6 +408,7 @@ def checkin_on_schedule(credentials):
   global checkin_thread
   gcm_check_in(**credentials["gcm"])
   checkin_thread = threading.Timer(CHECKIN_INTERVAL_SECS, checkin_on_schedule, [credentials])
+  checkin_thread.start()
 
 
 def listen(credentials, callback, received_persistent_ids=[], obj=None):

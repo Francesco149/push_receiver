@@ -18,7 +18,6 @@ import json
 import time
 import threading
 from binascii import hexlify
-from .register import gcm_check_in, register
 
 try:
   FileExistsError
@@ -224,13 +223,6 @@ def __handle_ping(s, p):
   __send(s, req)
 
 
-def checkin_on_schedule(credentials):
-  global checkin_thread
-  gcm_check_in(**credentials["gcm"])
-  checkin_thread = threading.Timer(CHECKIN_INTERVAL_SECS, checkin_on_schedule, [credentials])
-  checkin_thread.start()
-
-
 def listen(credentials, callback, received_persistent_ids=[], obj=None):
   """
   listens for push notifications
@@ -242,7 +234,6 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
   obj: optional arbitrary value passed to callback
   """
   s = __login(credentials, received_persistent_ids)
-  checkin_on_schedule(credentials)  
   while True:
     try:
       p = __recv(s)
@@ -258,7 +249,3 @@ def listen(credentials, callback, received_persistent_ids=[], obj=None):
     except ConnectionResetError:
       __log.debug("Connection Reset: Reconnecting")
       s = __login(credentials, received_persistent_ids)
-
-
-def shutdown():
-  checkin_thread.cancel()

@@ -28,12 +28,13 @@ you can also run this example with this command (change the sender id)
 
 .. code-block:: sh
 
-    python -m "push_receiver" --sender-id=722915550290
+    python -m "push_receiver" --sender-id=722915550290 --app-id 1:722915550290:web:8c409a0923422212c7530
 
 
 .. code-block:: python
 
-    from push_receiver import register, listen
+    from register import register
+    from push_receiver import PushReceiver
     import json
 
 
@@ -77,4 +78,6 @@ you can also run this example with this command (change the sender id)
       with open("persistent_ids.txt", "a+") as f:
         received_persistent_ids = [x.strip() for x in f]
 
-      listen(credentials, on_notification, received_persistent_ids)
+        receiver = PushReceiver(credentials, received_persistent_ids)
+        receiver.listen(on_notification)
+

@@ -5,7 +5,7 @@ import logging
 import sys
 import os.path
 from .register import register
-from .push_receiver import listen
+from .push_receiver import PushReceiver
 
 def run_example():
   """sample that registers a token and waits for notifications"""
@@ -60,4 +60,5 @@ def run_example():
   with open(persistent_ids_path, "a+") as f:
     received_persistent_ids = [x.strip() for x in f]
 
-  listen(credentials, on_notification, received_persistent_ids)
+  receiver = PushReceiver(credentials, received_persistent_ids)
+  receiver.listen(on_notification)
